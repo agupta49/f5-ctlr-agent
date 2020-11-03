@@ -440,40 +440,41 @@ class ConfigHandler():
         incomplete = 0
         for mgr in self._managers:
             #amit
-            if not mgr.is_gtm():
-                partition = mgr.get_partition()
-                cfg_ltm = create_ltm_config(partition, config)
-                try:
-                    # Manually create custom profiles;
-                    # CCCL doesn't yet do this
-                    if 'customProfiles' in cfg_ltm and \
-                            mgr.get_schema_type() == 'ltm':
-                        tmp = 0
-                        tmp = _create_custom_profiles(
-                            mgr.mgmt_root(),
-                            partition,
-                            cfg_ltm['customProfiles'])
-                        incomplete += tmp
+            if mgr.is_gtm():
+                continue
+            partition = mgr.get_partition()
+            cfg_ltm = create_ltm_config(partition, config)
+            try:
+                # Manually create custom profiles;
+                # CCCL doesn't yet do this
+                if 'customProfiles' in cfg_ltm and \
+                        mgr.get_schema_type() == 'ltm':
+                    tmp = 0
+                    tmp = _create_custom_profiles(
+                        mgr.mgmt_root(),
+                        partition,
+                        cfg_ltm['customProfiles'])
+                    incomplete += tmp
 
-                    # Apply the BIG-IP config after creating profiles
-                    # and before deleting profiles
-                    if mgr.get_schema_type() == 'net':
-                        incomplete += mgr._apply_net_config(cfg_net)
-                    else:
-                        incomplete += mgr._apply_ltm_config(cfg_ltm)
+                # Apply the BIG-IP config after creating profiles
+                # and before deleting profiles
+                if mgr.get_schema_type() == 'net':
+                    incomplete += mgr._apply_net_config(cfg_net)
+                else:
+                    incomplete += mgr._apply_ltm_config(cfg_ltm)
 
-                    # Manually delete custom profiles (if needed)
-                    if mgr.get_schema_type() == 'ltm':
-                        _delete_unused_ssl_profiles(
-                            mgr,
-                            partition,
-                            cfg_ltm)
+                # Manually delete custom profiles (if needed)
+                if mgr.get_schema_type() == 'ltm':
+                    _delete_unused_ssl_profiles(
+                        mgr,
+                        partition,
+                        cfg_ltm)
 
-                except F5CcclError as e:
-                    # We created an invalid configuration, raise the
-                    # exception and fail
-                    log.error("CCCL Error: %s", e.msg)
-                    incomplete += 1
+            except F5CcclError as e:
+                # We created an invalid configuration, raise the
+                # exception and fail
+                log.error("CCCL Error: %s", e.msg)
+                incomplete += 1
 
         return incomplete
 
@@ -701,24 +702,26 @@ class GTMManager(object):
 
         if "wideIPs" in gtmConfig[partition]:
             for config in gtmConfig[partition]['wideIPs']:
-                #Create GTM pool
-                self.create_gtm_pool(gtm, partition, config)
-                obj = []
+                monitor = ""
+                newPools = dict()
                 for pool in config['pools']:
                     #Pool object
-                    obj.append({
+                    newPools[pool['name']]= {
                         'name': pool['name'], 'partition': partition, 'ratio': 1
-                        })
-                    #if bool(pool['monitor']):
+                        }
+                    if "monitor" in pool:
                         #Create Health Monitor
-                    #    self.create_HM(gtm, partition, pool['monitor'])
+                        monitor = pool['monitor']['name']
+                        self.create_HM(gtm, partition, pool['monitor'])
+                #Create GTM pool
+                self.create_gtm_pool(gtm, partition, config, monitor)
                 #Create Wideip
-                self.create_wideip(gtm, partition, config,obj)
+                self.create_wideip(gtm, partition, config,newPools)
                 #Attach pool to wideip
                 # self.attach_gtm_pool_to_wideip(
                 # gtm, config['name'], partition, obj)
 
-    def create_wideip(self, gtm, partition, config,obj):
+    def create_wideip(self, gtm, partition, config,newPools):
         """ Create wideip and returns the wideip object """
         exist=gtm.wideips.a_s.a.exists(name=config['name'], partition=partition)
         if not exist:
@@ -727,26 +730,29 @@ class GTMManager(object):
                 name=config['name'],
                 partition=partition)
             #Attach pool to wideip
-            self.attach_gtm_pool_to_wideip(gtm, config['name'], partition, obj)
+            self.attach_gtm_pool_to_wideip(gtm,config['name'],partition,list(newPools.values()))
         else:
             wideip = gtm.wideips.a_s.a.load(
                 name=config['name'],
                 partition=partition)
-            newObj = obj
+            duplicatePools = []
             if hasattr(wideip,'pools'):
-                for p in obj:
-                    for pool in wideip.raw['pools']:
-                        if p['name']==pool['name']:
-                            newObj.remove(p)
-            if len(newObj)>0:
+                for p in newPools.keys():
+                    if hasattr(wideip.raw['pools'],p):
+                        duplicatePools.append(p)
+            
+            for poolName in duplicatePools:
+                del newPools[poolName]
+
+            if len(newPools)>0:
                 self.attach_gtm_pool_to_wideip(
                     gtm,
                     config['name'],
                     partition,
-                    newObj)
+                    list(newPools.values()))
 
 
-    def create_gtm_pool(self, gtm, partition, config):
+    def create_gtm_pool(self, gtm, partition, config, monitorName):
         """ Create gtm pools """
         for pool in config['pools']:
             exist=gtm.pools.a_s.a.exists(name=pool['name'], partition=partition)
@@ -754,9 +760,15 @@ class GTMManager(object):
             if not exist:
                 #Create pool object
                 log.info('GTM: Creating Pool: {}'.format(pool['name']))
-                pl=gtm.pools.a_s.a.create(
+                if not monitorName:
+                    pl=gtm.pools.a_s.a.create(
                     name=pool['name'],
                     partition=partition)
+                else:
+                    pl=gtm.pools.a_s.a.create(
+                        name=pool['name'],
+                        partition=partition,
+                        monitor="/"+partition+"/"+monitorName)
             if bool(pool['members']):
                 for member in pool['members']:
                     #Add member to pool
@@ -809,9 +821,14 @@ class GTMManager(object):
 
     def create_HM(self, gtm, partition, monitor):
         """ Create Health Monitor """
-        exist=gtm.monitor.https.http.exists(
-            name=monitor['name'],
-            partition=partition)
+        if monitor['type']=="http":
+            exist=gtm.monitor.https.http.exists(
+                name=monitor['name'],
+                partition=partition)
+        if monitor['type']=="https":
+            exist=gtm.monitor.https_s.https.exists(
+                name=monitor['name'],
+                partition=partition)
         if not exist:
             if monitor['type']=="http":
                 gtm.monitor.https.http.create(
