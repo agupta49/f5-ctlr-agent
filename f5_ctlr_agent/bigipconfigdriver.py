@@ -755,7 +755,7 @@ class GTMManager(object):
             pl = {}
             if not exist:
                 #Create pool object
-                log.info('GTM: Creating Pool: {}'.format(pool['name']))
+                log.info('GTM: Creating pool: {}'.format(pool['name']))
                 if not monitorName:
                     pl=gtm.pools.a_s.a.create(
                     name=pool['name'],
