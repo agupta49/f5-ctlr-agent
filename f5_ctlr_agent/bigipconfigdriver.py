@@ -701,17 +701,19 @@ class GTMManager(object):
 
         if "wideIPs" in gtmConfig[partition]:
             for config in gtmConfig[partition]['wideIPs']:
-                #Create GTM pool
-                self.create_gtm_pool(gtm, partition, config)
+                monitor = ""
                 obj = []
                 for pool in config['pools']:
                     #Pool object
                     obj.append({
                         'name': pool['name'], 'partition': partition, 'ratio': 1
                         })
-                    #if bool(pool['monitor']):
+                    if "monitor" in pool:
                         #Create Health Monitor
-                    #    self.create_HM(gtm, partition, pool['monitor'])
+                        monitor = pool['monitor']['name']
+                        self.create_HM(gtm, partition, pool['monitor'])
+                #Create GTM pool
+                self.create_gtm_pool(gtm, partition, config, monitor)
                 #Create Wideip
                 self.create_wideip(gtm, partition, config,obj)
                 #Attach pool to wideip
@@ -746,7 +748,7 @@ class GTMManager(object):
                     newObj)
 
 
-    def create_gtm_pool(self, gtm, partition, config):
+    def create_gtm_pool(self, gtm, partition, config, monitorName):
         """ Create gtm pools """
         for pool in config['pools']:
             exist=gtm.pools.a_s.a.exists(name=pool['name'], partition=partition)
@@ -754,9 +756,15 @@ class GTMManager(object):
             if not exist:
                 #Create pool object
                 log.info('GTM: Creating Pool: {}'.format(pool['name']))
-                pl=gtm.pools.a_s.a.create(
+                if not monitorName:
+                    pl=gtm.pools.a_s.a.create(
                     name=pool['name'],
                     partition=partition)
+                else:
+                    pl=gtm.pools.a_s.a.create(
+                        name=pool['name'],
+                        partition=partition,
+                        monitor="/"+partition+"/"+monitorName)
             if bool(pool['members']):
                 for member in pool['members']:
                     #Add member to pool
@@ -809,9 +817,14 @@ class GTMManager(object):
 
     def create_HM(self, gtm, partition, monitor):
         """ Create Health Monitor """
-        exist=gtm.monitor.https.http.exists(
-            name=monitor['name'],
-            partition=partition)
+        if monitor['type']=="http":
+            exist=gtm.monitor.https.http.exists(
+                name=monitor['name'],
+                partition=partition)
+        if monitor['type']=="https":
+            exist=gtm.monitor.https_s.https.exists(
+                name=monitor['name'],
+                partition=partition)
         if not exist:
             if monitor['type']=="http":
                 gtm.monitor.https.http.create(
