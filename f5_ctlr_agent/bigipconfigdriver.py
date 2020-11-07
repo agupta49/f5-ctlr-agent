@@ -348,7 +348,8 @@ class ConfigHandler():
                     if not _is_ltm_disabled(config) and \
                             'resources' not in config:
                         continue
-                    incomplete = self._update_cccl(config)
+                    # Amit
+                    # incomplete = self._update_cccl(config)
                 except ValueError:
                     formatted_lines = traceback.format_exc().splitlines()
                     last_line = formatted_lines[-1]
@@ -417,8 +418,8 @@ class ConfigHandler():
         gtmIncomplete=0
         for mgr in self._managers:
             if mgr.is_gtm():
-                # partition = mgr._gtm.get_partition()
-                partition="Common"
+                partition = mgr._gtm.get_partition()
+                # partition="Common"
                 try:
                     cfg_gtm=get_gtm_config(partition,config)
                     if partition in cfg_gtm:
