@@ -1068,6 +1068,26 @@ def main():
         # Read version and build info, set user-agent for ICR session
         user_agent = _set_user_agent(args.ctlr_prefix)
 
+        # GTM BIG-IP to manage
+        def _gtmbigip_connect_cb(log_success):
+            url = urlparse(config['gtm_bigip']['url'])
+            host = url.hostname
+            port = url.port
+            if not port:
+                port = 443
+            try:
+                bigip = mgmt_root(
+                    host,
+                    config['gtm_bigip']['username'],
+                    config['gtm_bigip']['password'],
+                    port,
+                    "tmos")
+                if log_success:
+                    log.info('GTM BIG-IP connection established.')
+                return (True, bigip)
+            except Exception as e:
+                return (False, 'GTM BIG-IP connection error: {}'.format(e))
+
         managers = []
         if not _is_ltm_disabled(config):
             for partition in config['bigip']['partitions']:
@@ -1087,10 +1107,11 @@ def main():
                 schema_path=_find_net_schema())
             managers.append(manager)
         if _is_gtm_config(config):
+            gtmbigip = _retry_backoff(_gtmbigip_connect_cb)
             for partition in config['bigip']['partitions']:
                 # Management for the BIG-IP partitions
                 manager = CloudServiceManager(
-                    bigip,
+                    gtmbigip,
                     partition,
                     user_agent=user_agent,
                     gtm=True)
